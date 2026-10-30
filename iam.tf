@@ -34,13 +34,20 @@ resource "aws_iam_role_policy" "main" {
 
   policy = jsonencode({
     Version = "2012-10-17",
-    Statement = [
+    Statement = concat([
       {
         Action   = ["sts:AssumeRole", "sts:TagSession"]
         Effect   = "Allow",
         Resource = local.assumable_roles
       }
-    ]
+      ], var.deployment_id == null ? [] : [{
+        Action   = ["rds:DescribeDBInstances", "rds:DescribeDBClusters"]
+        Effect   = "Allow"
+        Resource = "*"
+        Condition = {
+          StringEquals = { "aws:RequestedRegion" = data.aws_region.current.name }
+        }
+    }])
   })
 }
 

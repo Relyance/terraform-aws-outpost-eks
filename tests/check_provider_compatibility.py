@@ -5,6 +5,7 @@ Public Registry/provider downloads are required. Root tests use mock plans; the
 S3 policy test applies only virtual resources using explicit resource overrides.
 Logs, copied fixtures, providers, and an empty HOME stay under .terraform/.
 """
+
 import json
 import os
 import re
@@ -39,7 +40,10 @@ ENV = {
 def run(directory, *arguments):
     result = subprocess.run(
         [TERRAFORM, f"-chdir={directory}", *arguments],
-        env=ENV, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        env=ENV,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
     )
     log = directory / (arguments[0] + ".log")
     log.write_text(result.stdout)
@@ -56,10 +60,10 @@ def run(directory, *arguments):
 
 def pin(directory, version):
     (directory / "compatibility_override.tf").write_text(
-        'terraform {\n  required_providers {\n    aws = {\n'
+        "terraform {\n  required_providers {\n    aws = {\n"
         '      source = "hashicorp/aws"\n'
         f'      version = "= {version}"\n'
-        '    }\n  }\n}\n'
+        "    }\n  }\n}\n"
     )
 
 
@@ -74,16 +78,30 @@ for version in VERSIONS:
     wrapper.mkdir(parents=True)
     pin(wrapper, version)
     (wrapper / "main.tf").write_text(
-        'module "sierra" {\n  source = ' + json.dumps(str(ROOT)) + '\n}\n'
+        'module "sierra" {\n  source = ' + json.dumps(str(ROOT)) + "\n}\n"
     )
     run(wrapper, "init", "-backend=false", "-input=false", "-no-color")
     run(wrapper, "validate", "-no-color")
 
     source = base / "source"
-    shutil.copytree(ROOT, source, ignore=shutil.ignore_patterns(".git", ".terraform", ".terraform.lock.hcl"))
+    shutil.copytree(
+        ROOT,
+        source,
+        ignore=shutil.ignore_patterns(".git", ".terraform", ".terraform.lock.hcl"),
+    )
     pin(source, version)
     shutil.copy(wrapper / ".terraform.lock.hcl", source / ".terraform.lock.hcl")
     run(source, "init", "-backend=false", "-input=false", "-no-color")
+    subprocess.run(
+        [
+            sys.executable,
+            str(source / "tests" / "check_eks_access_ordering.py"),
+            "--terraform",
+            TERRAFORM,
+        ],
+        env=ENV,
+        check=True,
+    )
     run(source, "validate", "-no-color")
     run(source, "test", "-no-color")
 
@@ -93,7 +111,8 @@ for version in VERSIONS:
         path = example / "sierra.tf"
         local_example, replacements = re.subn(
             r'source\s*=\s*"Relyance-Ext/sierra/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
-            'source = "../.."', path.read_text(),
+            'source = "../.."',
+            path.read_text(),
         )
         if replacements != 1:
             sys.exit(f"Expected one version-pinned Sierra module in {path}")
@@ -102,6 +121,14 @@ for version in VERSIONS:
         shutil.copy(wrapper / ".terraform.lock.hcl", example / ".terraform.lock.hcl")
         run(example, "init", "-backend=false", "-input=false", "-no-color")
         run(example, "validate", "-no-color")
+
+    regional_example = source / "examples" / "multiple_existing_clusters"
+    pin(regional_example, version)
+    shutil.copy(
+        wrapper / ".terraform.lock.hcl", regional_example / ".terraform.lock.hcl"
+    )
+    run(regional_example, "init", "-backend=false", "-input=false", "-no-color")
+    run(regional_example, "validate", "-no-color")
 
     s3 = source / "modules" / "s3"
     pin(s3, version)

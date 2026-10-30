@@ -33,7 +33,7 @@ mock_provider "aws" {
     defaults = { json = "{\"Version\":\"2012-10-17\",\"Statement\":[]}" }
   }
   mock_resource "aws_iam_role" {
-    defaults = { arn = "arn:aws:iam::111122223333:role/fixture-scanner" }
+    defaults = { arn = "arn:aws:iam::111122223333:role/fixture-reader" }
   }
 }
 mock_provider "http" {}
@@ -109,4 +109,48 @@ run "create_cluster_defaults" {
     condition     = keys(aws_eks_pod_identity_association.main) == ["sierra"] && aws_eks_pod_identity_association.main["sierra"].namespace == "sierra"
     error_message = "The default Pod Identity association address and namespace must remain unchanged."
   }
+}
+
+run "actual_regional_customer_outputs" {
+  # Virtual providers only: computed role ARNs become known at mock apply.
+  command = apply
+  variables {
+    deployment_id             = "west"
+    route_revision            = 1
+    create_vpc_and_eks        = false
+    existing_eks_cluster_name = "fixture-cluster"
+    base_name                 = "Relyance_InHost_West"
+    s3_bucket_suffix          = "-west"
+  }
+  override_module {
+    target  = module.work_bucket
+    outputs = { id = "relyance-work-111122223333-west" }
+  }
+  override_module {
+    target  = module.findings_bucket
+    outputs = { id = "relyance-findings-111122223333-west" }
+  }
+  assert {
+    condition     = output.provisioning_facts.aws_region == "us-west-2" && output.provisioning_facts.aws_account_id == "111122223333" && output.provisioning_facts.aws_partition == "aws"
+    error_message = "Provisioning facts must describe the actual provider account and region."
+  }
+  assert {
+    condition     = output.provisioning_facts.work_uri == "s3://relyance-work-111122223333-west" && output.provisioning_facts.findings_uri == "s3://relyance-findings-111122223333-west" && output.provisioning_facts.reader_role_arn == "arn:aws:iam::111122223333:role/fixture-reader"
+    error_message = "Facts must use provisioned suffixed buckets and reader role, never canonical guesses."
+  }
+  assert {
+    condition     = keys(output.provisioning_facts.bucket_authorities) == ["relyance-findings-111122223333-west", "relyance-work-111122223333-west"] && output.provisioning_facts.bucket_authorities["relyance-work-111122223333-west"].aws_region == "us-west-2"
+    error_message = "Each actual bucket requires provider-bound regional ownership."
+  }
+}
+
+run "reject_regional_default_role_and_bucket_collision" {
+  command = plan
+  variables {
+    create_vpc_and_eks        = false
+    existing_eks_cluster_name = "fixture-cluster"
+    deployment_id             = "west"
+    route_revision            = 1
+  }
+  expect_failures = [var.deployment_id]
 }

@@ -529,3 +529,44 @@ Pass the applied `findings_object_deletion` output unchanged to deployment
 provisioning. Its three fields are `enabled`, `account_id` and `bucket`. Older
 modules without that output keep deployment deletion gates off. This capability
 does not itself schedule Delta compaction, vacuum or noncurrent-version expiry.
+
+### Regional provisioning facts (source change; release required)
+
+Existing installations retain their old outputs, resource addresses and names.
+An explicit `deployment_id`/positive `route_revision` pair emits nonsecret
+`provisioning_facts` from actual provider/resource values: account, partition,
+region, issuer, scanner/reader roles, work/findings URIs and bucket ownership.
+Leave the pair null for legacy behavior. Regional inputs require a distinct
+`base_name` and nonempty `s3_bucket_suffix` to avoid same-account ownership
+collisions. See `examples/multiple_existing_clusters` for the existing-cluster
+path; the example references this source until a reviewed module release exists.
+
+Optional exact `inventory_uri` and `outbox_uri` must be supplied together, use
+this installation's reader-authorized findings bucket for inventory and an existing
+work/findings bucket for outbox, with disjoint canonical nonempty prefixes. They create no storage resources and grant no additional IAM.
+Null preserves GAI-only/legacy behavior. Preserve historical prefixes explicitly;
+these source outputs do not migrate roots or qualify DP/inventory execution.
+The reader external ID remains outside this nonsecret output and follows its
+existing separate custody channel. Publication and applied customer validation
+are later reviewed gates.
+
+Regional worker roles receive only `rds:DescribeDBInstances` and
+`rds:DescribeDBClusters` for endpoint metadata discovery. Their
+`aws:RequestedRegion` condition uses the actual AWS provider region. Discovery
+lists resources without a known database identifier, so this statement uses
+`Resource = "*"`; the AWS service authorization reference also documents `db`
+and `cluster` resource types for resource-specific requests. Legacy installations
+with a null `deployment_id` retain their exact prior inline policy. These
+metadata actions do not grant SQL access or IAM database authentication;
+connection-specific IAM roles retain their separate permissions.
+
+When creating a cluster, both admin policy associations reference their matching
+EKS access entry so Terraform creates that entry first. To verify the dependency
+and preserve planned values without AWS calls, run `terraform test`,
+`python3 tests/check_eks_access_ordering.py`, and
+`python3 tests/check_legacy_plan.py --baseline-ref <reviewed-base-ref>` after
+initializing the module locally. The graph test uses Terraform's dependency
+graph; the legacy check compares native mock plans for both cluster modes.
+
+Permission references: [Amazon RDS actions and resource types](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html),
+[AWS requested-region condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).

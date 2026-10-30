@@ -228,3 +228,63 @@ run "bad_ns_rejected" {
   }
   expect_failures = [var.additional_service_account_namespaces]
 }
+
+run "legacy_main_policy_bytes_unchanged" {
+  command = plan
+  assert {
+    condition = aws_iam_role_policy.main.policy == jsonencode({
+      Version = "2012-10-17"
+      Statement = [{
+        Action   = ["sts:AssumeRole", "sts:TagSession"]
+        Effect   = "Allow"
+        Resource = [format("arn:aws:iam::%s:role/*", var.assumable_account_ids[0])]
+      }]
+    })
+    error_message = "A null deployment ID must retain the exact legacy inline policy bytes."
+  }
+}
+
+run "regional_rds_metadata_only_in_provider_region" {
+  command = plan
+  variables {
+    deployment_id    = "runtime-fixture"
+    route_revision   = 1
+    base_name        = "Scanner-runtime-fixture"
+    s3_bucket_suffix = "-runtime-fixture"
+  }
+  override_data {
+    target = data.aws_region.current
+    values = { name = "eu-west-2" }
+  }
+  assert {
+    condition = length(jsondecode(aws_iam_role_policy.main.policy).Statement) == 2 && try(
+      jsondecode(aws_iam_role_policy.main.policy).Statement[1] == {
+        Action    = ["rds:DescribeDBInstances", "rds:DescribeDBClusters"]
+        Effect    = "Allow"
+        Resource  = "*"
+        Condition = { StringEquals = { "aws:RequestedRegion" = "eu-west-2" } }
+      }, false
+    )
+    error_message = "Regional workers need exactly two read-only RDS discovery actions limited to the actual provider region."
+  }
+}
+
+run "regional_rds_metadata_follows_other_provider_region" {
+  command = plan
+  variables {
+    deployment_id    = "runtime-fixture"
+    route_revision   = 1
+    base_name        = "Scanner-runtime-fixture"
+    s3_bucket_suffix = "-runtime-fixture"
+  }
+  override_data {
+    target = data.aws_region.current
+    values = { name = "us-east-1" }
+  }
+  assert {
+    condition = try(
+      jsondecode(aws_iam_role_policy.main.policy).Statement[1].Condition.StringEquals["aws:RequestedRegion"] == "us-east-1", false
+    )
+    error_message = "RDS metadata permission must follow provider facts instead of a hard-coded deployment region."
+  }
+}

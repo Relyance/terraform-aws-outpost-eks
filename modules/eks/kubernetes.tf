@@ -10,9 +10,9 @@ resource "aws_eks_access_entry" "admin" {
 resource "aws_eks_access_policy_association" "admin" {
   for_each = var.eks_kubectl_admins
 
-  cluster_name  = aws_eks_cluster.main.name
+  cluster_name  = aws_eks_access_entry.admin[each.key].cluster_name
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSAdminPolicy"
-  principal_arn = each.value
+  principal_arn = aws_eks_access_entry.admin[each.key].principal_arn
 
   access_scope {
     type = "cluster"
@@ -22,9 +22,9 @@ resource "aws_eks_access_policy_association" "admin" {
 resource "aws_eks_access_policy_association" "cluster-admin" {
   for_each = var.eks_kubectl_admins
 
-  cluster_name  = aws_eks_cluster.main.name
+  cluster_name  = aws_eks_access_entry.admin[each.key].cluster_name
   policy_arn    = "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy"
-  principal_arn = each.value
+  principal_arn = aws_eks_access_entry.admin[each.key].principal_arn
 
   access_scope {
     type = "cluster"

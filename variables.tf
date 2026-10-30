@@ -320,3 +320,41 @@ variable "override_service_account" {
     error_message = "override_serivce_account is only for testing and cannot be used in prod environment"
   }
 }
+
+variable "deployment_id" {
+  description = "Optional stable regional deployment ID. Pair with route_revision; legacy installations leave both null. Does not rename any existing resources."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.deployment_id == null ? var.route_revision == null : can(regex("^[a-z][a-z0-9-]{0,19}$", var.deployment_id)) && var.route_revision != null && !contains(["Relyance_Sierra", "Relyance_Sierra_Node", "Relyance_InHost_Node"], var.base_name) && length(var.s3_bucket_suffix) > 0
+    error_message = "Regional deployments need a safe ID/revision pair, an explicit unique base_name excluding legacy scanner names, and a nonempty bucket suffix."
+  }
+}
+variable "route_revision" {
+  description = "Reviewed immutable route revision for provisioning facts only; does not qualify or enable execution."
+  type        = number
+  default     = null
+  validation {
+    condition     = var.route_revision == null ? true : var.route_revision > 0 && floor(var.route_revision) == var.route_revision
+    error_message = "route_revision must be a positive integer paired with deployment_id."
+  }
+}
+
+variable "inventory_uri" {
+  description = "Optional exact canonical DP inventory root in this installation's reader-authorized findings bucket. Pair with outbox_uri. Preserves legacy source prefixes unless explicitly supplied."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.inventory_uri == null ? true : can(regex("^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$", var.inventory_uri))
+    error_message = "inventory_uri needs an exact S3 bucket and canonical nonempty relative prefix."
+  }
+}
+variable "outbox_uri" {
+  description = "Optional exact canonical DP outbox root, disjoint from inventory_uri, using an existing work/findings bucket. Does not create storage or enable execution."
+  type        = string
+  default     = null
+  validation {
+    condition     = var.outbox_uri == null ? true : can(regex("^s3://[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]/[A-Za-z0-9_-][A-Za-z0-9._-]*(/[A-Za-z0-9_-][A-Za-z0-9._-]*)*$", var.outbox_uri))
+    error_message = "outbox_uri needs an exact S3 bucket and canonical nonempty relative prefix."
+  }
+}

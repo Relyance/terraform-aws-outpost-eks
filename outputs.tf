@@ -46,3 +46,37 @@ output "findings_object_deletion" {
     bucket     = module.findings_bucket.id
   }
 }
+
+output "provisioning_facts" {
+  description = "Nonsecret facts from the actual installation. Add reviewed deployment ID/revision in the platform handoff; reader_external_id remains a separate custody channel."
+  precondition {
+    condition = var.inventory_uri == null ? var.outbox_uri == null : try(
+      var.deployment_id != null && var.outbox_uri != null &&
+      split("/", var.inventory_uri)[2] == module.findings_bucket.id &&
+      contains([module.work_bucket.id, module.findings_bucket.id], split("/", var.outbox_uri)[2]) &&
+      var.inventory_uri != var.outbox_uri &&
+    !startswith(var.inventory_uri, "${var.outbox_uri}/") && !startswith(var.outbox_uri, "${var.inventory_uri}/"), false)
+    error_message = "DP roots need a complete disjoint pair, inventory in the reader-authorized findings bucket, outbox in an existing regional bucket, and explicit deployment identity."
+  }
+  value = var.deployment_id == null ? null : {
+    schema_version   = 1
+    deployment_id    = var.deployment_id
+    route_revision   = var.route_revision
+    aws_account_id   = local.account_id
+    aws_partition    = data.aws_partition.current.partition
+    aws_region       = data.aws_region.current.name
+    oidc_issuer      = local.eks_cluster_oidc_issuer
+    work_uri         = "s3://${module.work_bucket.id}"
+    findings_uri     = "s3://${module.findings_bucket.id}"
+    inventory_uri    = var.inventory_uri
+    outbox_uri       = var.outbox_uri
+    scanner_role_arn = aws_iam_role.main.arn
+    reader_role_arn  = aws_iam_role.reader.arn
+    bucket_authorities = {
+      for name in [module.work_bucket.id, module.findings_bucket.id] : name => {
+        aws_account_id = local.account_id
+        aws_region     = data.aws_region.current.name
+      }
+    }
+  }
+}
