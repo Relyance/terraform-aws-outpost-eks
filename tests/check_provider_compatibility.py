@@ -123,6 +123,15 @@ for version in VERSIONS:
         run(example, "validate", "-no-color")
 
     regional_example = source / "examples" / "multiple_existing_clusters"
+    regional_path = regional_example / "main.tf"
+    local_regional_example, replacements = re.subn(
+        r'source\s*=\s*"Relyance-Ext/sierra/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
+        'source = "../.."',
+        regional_path.read_text(),
+    )
+    if replacements != 2:
+        sys.exit(f"Expected two version-pinned Sierra modules in {regional_path}")
+    regional_path.write_text(local_regional_example)
     pin(regional_example, version)
     shutil.copy(
         wrapper / ".terraform.lock.hcl", regional_example / ".terraform.lock.hcl"

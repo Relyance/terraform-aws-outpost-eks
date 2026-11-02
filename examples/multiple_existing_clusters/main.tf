@@ -1,4 +1,3 @@
-# Source example; publish/review a module release before switching to Registry.
 # One root owns these AWS resources. The shared Molokai project/pool has one
 # separate platform owner; do not instantiate that platform stack per region.
 terraform {
@@ -16,7 +15,8 @@ provider "aws" {
   region = "us-east-1"
 }
 module "west" {
-  source                                 = "../.."
+  source                                 = "Relyance-Ext/sierra/aws"
+  version                                = "0.10.0"
   providers                              = { aws = aws.west }
   create_vpc_and_eks                     = false
   existing_eks_cluster_name              = var.west_cluster_name
@@ -31,7 +31,8 @@ module "west" {
   byok_secret_write_back                 = false
 }
 module "east" {
-  source                                 = "../.."
+  source                                 = "Relyance-Ext/sierra/aws"
+  version                                = "0.10.0"
   providers                              = { aws = aws.east }
   create_vpc_and_eks                     = false
   existing_eks_cluster_name              = var.east_cluster_name

@@ -9,7 +9,7 @@ Visit [relyance.ai](https://relyance.ai) to learn more about our services.
 
 The source module accepts `hashicorp/aws >= 5.79, < 7.0`: provider 5.79 introduced the EKS Auto Mode schema used here, and the upper bound excludes an unreviewed major release. The local submodules (`eks`, `existing_eks`, `vpc`, `s3`, and `node_pools`) have no additional AWS provider pins or remote module dependencies. Defaults and resource addresses are unchanged.
 
-Module `0.9.0` supports AWS provider 5.79 and 6.x. The examples below pin module `0.9.0` and select provider 6.x; existing callers can retain provider 5.x within the supported range. For existing state, follow HashiCorp's [provider 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) and review the customer-specific plan before applying an upgrade.
+Module `0.10.0` supports AWS provider 5.79 and 6.x. The examples below pin module `0.10.0` and select provider 6.x; existing callers can retain provider 5.x within the supported range. For existing state, follow HashiCorp's [provider 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) and review the customer-specific plan before applying an upgrade.
 
 `aws_region.current.name` remains in use because provider 5.79 does not expose the replacement `region` attribute. Provider 6 retains `name` with a deprecation warning. The module already uses `aws_eip.domain`, avoids removed EKS addon arguments, and uses literal booleans for launch template EBS settings. See the [provider 5.79 region schema](https://github.com/hashicorp/terraform-provider-aws/blob/v5.79.0/website/docs/d/region.html.markdown) and [provider 6 migration changes](https://github.com/hashicorp/terraform-provider-aws/blob/v6.0.0/website/docs/guides/version-6-upgrade.html.markdown).
 
@@ -256,7 +256,7 @@ In this mode, the Terraform module only creates
 # For collaboration, configure backend for shared remote state file
 # For maintainability, replace hard-coded values with variables or outputs from other modules
 
-# Sierra 0.9.0 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+# Sierra 0.10.0 supports AWS providers 5.79 and 6.x; this example selects 6.x.
 terraform {
   required_version = "~> 1.9"
   required_providers {
@@ -269,7 +269,7 @@ terraform {
 
 module "sierra" {
   source  = "Relyance-Ext/sierra/aws"
-  version = "0.9.0"
+  version = "0.10.0"
 
   # The GCP project where findings data is captured
   # To be provided by Relyance; required if code_analysis_enabled is true
@@ -352,7 +352,7 @@ Remember, the cluster should be auto mode, with EKS pod identity agent addon ins
 # For collaboration, configure backend for shared remote state file
 # For maintainability, replace hard-coded values with variables or outputs from other modules
 
-# Sierra 0.9.0 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+# Sierra 0.10.0 supports AWS providers 5.79 and 6.x; this example selects 6.x.
 terraform {
   required_version = "~> 1.9"
   required_providers {
@@ -365,7 +365,7 @@ terraform {
 
 module "sierra" {
   source  = "Relyance-Ext/sierra/aws"
-  version = "0.9.0"
+  version = "0.10.0"
 
   # The GCP project where findings data is captured
   # To be provided by Relyance; required if code_analysis_enabled is true
@@ -530,16 +530,20 @@ provisioning. Its three fields are `enabled`, `account_id` and `bucket`. Older
 modules without that output keep deployment deletion gates off. This capability
 does not itself schedule Delta compaction, vacuum or noncurrent-version expiry.
 
-### Regional provisioning facts (source change; release required)
+### Regional provisioning facts (0.10.0)
 
-Existing installations retain their old outputs, resource addresses and names.
+Module `0.10.0` adds optional regional provisioning facts and regional RDS metadata
+discovery. Existing installations retain their old outputs, resource addresses and
+names. The `relyance-inhost` version tag on non-node resources changes to `0.10.0`;
+node version tags remain unchanged. Review the plan against existing state before
+applying an upgrade; a release does not migrate an installation into regional mode.
 An explicit `deployment_id`/positive `route_revision` pair emits nonsecret
 `provisioning_facts` from actual provider/resource values: account, partition,
 region, issuer, scanner/reader roles, work/findings URIs and bucket ownership.
 Leave the pair null for legacy behavior. Regional inputs require a distinct
 `base_name` and nonempty `s3_bucket_suffix` to avoid same-account ownership
 collisions. See `examples/multiple_existing_clusters` for the existing-cluster
-path; the example references this source until a reviewed module release exists.
+path, pinned to module `0.10.0`.
 
 Optional exact `inventory_uri` and `outbox_uri` must be supplied together, use
 this installation's reader-authorized findings bucket for inventory and an existing
@@ -548,7 +552,7 @@ Null preserves GAI-only/legacy behavior. Preserve historical prefixes explicitly
 these source outputs do not migrate roots or qualify DP/inventory execution.
 The reader external ID remains outside this nonsecret output and follows its
 existing separate custody channel. Publication and applied customer validation
-are later reviewed gates.
+remain separate reviewed gates.
 
 Regional worker roles receive only `rds:DescribeDBInstances` and
 `rds:DescribeDBClusters` for endpoint metadata discovery. Their
