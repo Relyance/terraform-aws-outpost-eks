@@ -1,3 +1,10 @@
+locals {
+  s3_bucket_names = {
+    for bucket in ["findings", "work", "sci"] :
+    bucket => "relyance-${bucket}-${local.account_id}${var.s3_bucket_suffix}"
+  }
+}
+
 # =============================================================================
 #         GAI Buckets
 # =============================================================================
@@ -6,7 +13,7 @@
 module "findings_bucket" {
   source = "./modules/s3"
 
-  name                   = "relyance-findings-${local.account_id}${var.s3_bucket_suffix}"
+  name                   = local.s3_bucket_names.findings
   tags                   = local.default_tags
   full_access_principals = [aws_iam_role.main.arn]
   rw_access_principals   = []
@@ -21,7 +28,7 @@ module "findings_bucket" {
 module "work_bucket" {
   source = "./modules/s3"
 
-  name                   = "relyance-work-${local.account_id}${var.s3_bucket_suffix}"
+  name                   = local.s3_bucket_names.work
   tags                   = local.default_tags
   full_access_principals = [aws_iam_role.main.arn]
   rw_access_principals   = []
@@ -40,7 +47,7 @@ module "sci_bucket" {
   source = "./modules/s3"
   count  = var.code_analysis_enabled ? 1 : 0
 
-  name                   = "relyance-sci-${local.account_id}${var.s3_bucket_suffix}"
+  name                   = local.s3_bucket_names.sci
   tags                   = local.default_tags
   full_access_principals = [aws_iam_role.main.arn]
   rw_access_principals   = []

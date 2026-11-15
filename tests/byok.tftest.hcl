@@ -288,3 +288,119 @@ run "regional_rds_metadata_follows_other_provider_region" {
     error_message = "RDS metadata permission must follow provider facts instead of a hard-coded deployment region."
   }
 }
+
+run "restrict_kms_key_use" {
+  command = apply
+
+  variables {
+    kms_key_administrator_role_arns = ["arn:aws:iam::111122223333:role/key-admin", "arn:aws:iam::111122223333:role/key-recovery"]
+    code_analysis_enabled           = true
+    gcp_project                     = "fixture-project"
+  }
+
+  override_data {
+    target = data.aws_iam_session_context.current
+    values = { issuer_arn = "arn:aws:iam::111122223333:role/key-admin" }
+  }
+
+  override_resource {
+    target = aws_iam_role.main
+    values = { arn = "arn:aws:iam::111122223333:role/scanner" }
+  }
+
+  override_resource {
+    target = aws_iam_role.reader
+    values = { arn = "arn:aws:iam::111122223333:role/reader" }
+  }
+
+  override_resource {
+    target = aws_iam_role.sci[0]
+    values = { arn = "arn:aws:iam::111122223333:role/sci" }
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement : statement.Principal.AWS
+      ])) == toset([
+      "arn:aws:iam::111122223333:role/key-admin",
+      "arn:aws:iam::111122223333:role/key-recovery",
+      "arn:aws:iam::111122223333:role/scanner",
+      "arn:aws:iam::111122223333:role/reader",
+      "arn:aws:iam::111122223333:role/sci",
+    ])
+    error_message = "The restricted policy must grant access to named roles only."
+  }
+
+  assert {
+    condition = alltrue([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement :
+      !contains(tolist(statement.Principal.AWS), "arn:aws:iam::111122223333:role/key-admin") ||
+      length(setintersection(toset(statement.Action), toset(["kms:*", "kms:Decrypt", "kms:Encrypt", "kms:GenerateDataKey", "kms:ReEncrypt*"]))) == 0
+    ])
+    error_message = "Key administrators must have no direct cryptographic permissions."
+  }
+
+  assert {
+    condition = !contains(flatten([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement : statement.Action
+    ]), "kms:CreateGrant")
+    error_message = "Existing-cluster mode does not need permission to create an EKS encryption grant."
+  }
+
+  assert {
+    condition = toset(flatten([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement : statement.Action
+      if contains(tolist(statement.Principal.AWS), "arn:aws:iam::111122223333:role/reader")
+      ])) == toset(["kms:Decrypt"]) && anytrue([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement :
+      try(
+        contains(tolist(statement.Principal.AWS), "arn:aws:iam::111122223333:role/reader") &&
+        statement.Condition.StringEquals["kms:ViaService"] == "s3.us-west-2.amazonaws.com" &&
+        toset(statement.Condition.StringLike["kms:EncryptionContext:aws:s3:arn"]) ==
+        toset(["arn:aws:s3:::relyance-findings-111122223333", "arn:aws:s3:::relyance-findings-111122223333/*"]),
+        false,
+      )
+    ])
+    error_message = "The hosted reader must only decrypt findings through S3, including legacy object versions."
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement :
+      try(
+        contains(tolist(statement.Principal.AWS), "arn:aws:iam::111122223333:role/sci") &&
+        toset(statement.Action) == toset(["kms:Decrypt", "kms:GenerateDataKey"]) &&
+        statement.Condition.StringEquals["kms:ViaService"] == "s3.us-west-2.amazonaws.com" &&
+        toset(statement.Condition.StringLike["kms:EncryptionContext:aws:s3:arn"]) ==
+        toset(["arn:aws:s3:::relyance-sci-111122223333", "arn:aws:s3:::relyance-sci-111122223333/*"]),
+        false,
+      )
+    ])
+    error_message = "SCI must be able to complete SSE-KMS multipart uploads only in its own bucket."
+  }
+}
+
+run "restricted_key_rejects_missing_execution_role" {
+  command = plan
+
+  variables {
+    kms_key_administrator_role_arns = ["arn:aws:iam::111122223333:role/key-admin", "arn:aws:iam::111122223333:role/key-recovery"]
+  }
+
+  expect_failures = [aws_kms_key_policy.main]
+}
+
+run "restricted_key_requires_recovery_role" {
+  command = plan
+
+  variables {
+    kms_key_administrator_role_arns = ["arn:aws:iam::111122223333:role/key-admin"]
+  }
+
+  override_data {
+    target = data.aws_iam_session_context.current
+    values = { issuer_arn = "arn:aws:iam::111122223333:role/key-admin" }
+  }
+
+  expect_failures = [var.kms_key_administrator_role_arns]
+}

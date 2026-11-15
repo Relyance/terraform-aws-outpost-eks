@@ -4,6 +4,24 @@ resource "aws_s3_bucket_policy" "bucket" {
 }
 
 data "aws_iam_policy_document" "bucket" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["s3:*"]
+    resources = [aws_s3_bucket.bucket.arn, "${aws_s3_bucket.bucket.arn}/*"]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
   dynamic "statement" {
     for_each = toset(length(var.full_access_principals) > 0 ? [0] : [])
     content {

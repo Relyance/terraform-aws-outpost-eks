@@ -154,3 +154,46 @@ run "reject_regional_default_role_and_bucket_collision" {
   }
   expect_failures = [var.deployment_id]
 }
+
+run "create_cluster_with_restricted_key" {
+  command = apply
+
+  variables {
+    vpc_cidr        = "172.30.0.0/16"
+    service_cidr    = "10.100.0.0/16"
+    subnet_cidrs    = { usw2-az1 = "172.30.0.0/20", usw2-az2 = "172.30.16.0/20" }
+    nat_subnet_cidr = "172.30.255.0/24"
+
+    kms_key_administrator_role_arns = ["arn:aws:iam::111122223333:role/key-admin", "arn:aws:iam::111122223333:role/key-recovery"]
+  }
+
+  override_data {
+    target = data.aws_iam_session_context.current
+    values = { issuer_arn = "arn:aws:iam::111122223333:role/key-admin" }
+  }
+
+  override_resource {
+    target = module.eks[0].aws_launch_template.main
+    values = { id = "lt-0123456789abcdef0" }
+  }
+
+  override_resource {
+    target = module.eks[0].aws_eks_cluster.main
+    values = {
+      endpoint              = "https://example.invalid"
+      identity              = [{ oidc = [{ issuer = "https://oidc.example.invalid" }] }]
+      certificate_authority = [{ data = "Zm9v" }]
+    }
+  }
+
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_kms_key_policy.main.policy).Statement :
+      contains(statement.Action, "kms:CreateGrant") &&
+      statement.Effect == "Allow" &&
+      contains(statement.Principal.AWS, "arn:aws:iam::111122223333:role/key-admin") &&
+      !can(statement.Condition)
+    ])
+    error_message = "The execution role must be able to create the EKS encryption grant."
+  }
+}

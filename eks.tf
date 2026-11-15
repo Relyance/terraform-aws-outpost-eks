@@ -7,7 +7,9 @@ module "eks" {
   service_cidr               = var.service_cidr
   eks_public_access_cidrs    = var.eks_public_access_cidrs
   eks_require_metadata_token = var.eks_require_metadata_token
-  kms_key_arn                = aws_kms_key.main.arn
+
+  # Wait for the key policy before EKS attempts to create its encryption grant.
+  kms_key_arn = "arn:${data.aws_partition.current.partition}:kms:${data.aws_region.current.name}:${local.account_id}:key/${aws_kms_key_policy.main.key_id}"
   eks_kubectl_admins = merge(
     var.eks_kubectl_admins,
     (

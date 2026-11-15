@@ -39,11 +39,41 @@ variables {
 run "findings_full_access_deletes_reader_remains_ro" {
   command = apply
   assert {
-    condition     = alltrue([for action in ["s3:DeleteObject", "s3:DeleteObjectVersion"] : contains(jsondecode(data.aws_iam_policy_document.bucket.json).Statement[0].Action, action)]) && !contains(jsondecode(data.aws_iam_policy_document.bucket.json).Statement[1].Action, "s3:DeleteObject") && !contains(jsondecode(data.aws_iam_policy_document.bucket.json).Statement[1].Action, "s3:DeleteObjectVersion")
-    error_message = "Full findings access must permit both deletion forms while reader remains read-only."
+    condition = length([
+      for statement in jsondecode(aws_s3_bucket_policy.bucket.policy).Statement : statement
+      if try(
+        statement.Effect == "Allow" &&
+        statement.Principal.AWS == "arn:aws:iam::000000000123:role/scanner" &&
+        alltrue([for action in ["s3:DeleteObject", "s3:DeleteObjectVersion"] : contains(statement.Action, action)]) &&
+        toset(statement.Resource) == toset(["arn:aws:s3:::findings-fixture", "arn:aws:s3:::findings-fixture/*"]),
+        false,
+      )
+    ]) == 1
+    error_message = "The scanner must be able to delete objects and versions in the dedicated findings bucket."
   }
   assert {
-    condition     = toset(jsondecode(data.aws_iam_policy_document.bucket.json).Statement[0].Resource) == toset(["arn:aws:s3:::findings-fixture", "arn:aws:s3:::findings-fixture/*"])
-    error_message = "General deletion must be confined to the dedicated bucket."
+    condition = toset(flatten([
+      for statement in jsondecode(aws_s3_bucket_policy.bucket.policy).Statement : statement.Action
+      if try(statement.Effect == "Allow" && statement.Principal.AWS == "arn:aws:iam::000000000123:role/reader", false)
+    ])) == toset(["s3:ListBucket", "s3:GetObject", "s3:GetObjectVersion"])
+    error_message = "The hosted reader must retain its read-only findings access."
+  }
+}
+
+run "denies_insecure_transport" {
+  command = plan
+  assert {
+    condition = anytrue([
+      for statement in jsondecode(aws_s3_bucket_policy.bucket.policy).Statement :
+      try(
+        statement.Effect == "Deny" &&
+        statement.Principal == "*" &&
+        statement.Action == "s3:*" &&
+        toset(statement.Resource) == toset(["arn:aws:s3:::findings-fixture", "arn:aws:s3:::findings-fixture/*"]) &&
+        tostring(statement.Condition.Bool["aws:SecureTransport"]) == "false",
+        false,
+      )
+    ])
+    error_message = "The bucket policy must deny plaintext requests to bucket and object APIs."
   }
 }

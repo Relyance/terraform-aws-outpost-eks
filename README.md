@@ -62,6 +62,37 @@ All non-node resources will have the tag `relyance-inhost` set to the module ver
   * `relyance-findings-<accountId>`: accessible from Relyance environment
 * KMS key for encrypting S3 buckets and EKS secrets
 
+#### Bucket transport and KMS access
+
+The findings, workspace, and optional SCI buckets require HTTPS.
+
+Set `kms_key_administrator_role_arns` to opt into the restricted policy on
+the module's existing KMS key. Supply existing IAM role ARNs in the deployment
+account. Include the role used by the Terraform AWS provider and a separately
+controlled recovery role. An empty set keeps the legacy KMS policy. When
+rotating administrator roles, add the replacement role and verify its access
+before removing the old role.
+
+```hcl
+kms_key_administrator_role_arns = [
+  "arn:aws:iam::123456789012:role/terraform-deploy",
+  "arn:aws:iam::123456789012:role/kms-recovery",
+]
+```
+
+The restricted policy removes account-wide IAM delegation. It allows the scanner,
+hosted reader, and optional SCI writer to use the key through S3 for their
+respective buckets, including objects written with or without S3 Bucket Keys.
+Use a separate key for BYOK Secrets Manager secrets.
+
+The update retains the key and its existing grants. For module-created EKS
+clusters, preserve the EKS encryption grant. Key administrators retain policy
+management and can change effective access. Review existing grants and any
+customer-managed consumers of this key before enabling the policy. Review the
+Terraform plan for an in-place policy update and verify the scanner, hosted
+reader, optional SCI writer, and EKS operations in a test installation before
+rolling it out.
+
 #### IAM resources
 
 The module creates the following roles:
@@ -490,6 +521,7 @@ output "sierra" {
 | <a name="input_env"></a> [env](#input\_env) | What environment are you accessing [stage, prod]? | `string` | `"prod"` | no |
 | <a name="input_existing_eks_cluster_name"></a> [existing\_eks\_cluster\_name](#input\_existing\_eks\_cluster\_name) | Name of existing EKS cluster to use when create\_vpc\_and\_eks is false | `string` | `null` | no |
 | <a name="input_gcp_project"></a> [gcp\_project](#input\_gcp\_project) | The GCP project name in Relyance used to facilitate cross-cloud communication | `string` | `null` | no |
+| <a name="input_kms_key_administrator_role_arns"></a> [kms\_key\_administrator\_role\_arns](#input_kms_key_administrator_role_arns) | Same-account IAM administrator role ARNs. A nonempty set enables the restricted KMS key policy. | `set(string)` | `[]` | no |
 | <a name="input_nat_subnet_cidr"></a> [nat\_subnet\_cidr](#input\_nat\_subnet\_cidr) | CIDR block for the outbound NAT's public subnet | `string` | `""` | no |
 | <a name="input_override_service_account"></a> [override\_service\_account](#input\_override\_service\_account) | Override service account name used for pod identity (testing only – do not use in production) | `string` | `null` | no |
 | <a name="input_require_existing_eks_cluster_addons"></a> [require\_existing\_eks\_cluster\_addons](#input\_require\_existing\_eks\_cluster\_addons) | Set false to allow existing EKS cluster without expected addons | `bool` | `true` | no |
@@ -565,12 +597,12 @@ metadata actions do not grant SQL access or IAM database authentication;
 connection-specific IAM roles retain their separate permissions.
 
 When creating a cluster, both admin policy associations reference their matching
-EKS access entry so Terraform creates that entry first. To verify the dependency
-and preserve planned values without AWS calls, run `terraform test`,
-`python3 tests/check_eks_access_ordering.py`, and
-`python3 tests/check_legacy_plan.py --baseline-ref <reviewed-base-ref>` after
-initializing the module locally. The graph test uses Terraform's dependency
-graph; the legacy check compares native mock plans for both cluster modes.
+EKS access entry so Terraform creates that entry first. Cluster and key alias
+creation also wait for the key policy. To verify these dependencies and both
+cluster modes without AWS calls, run `terraform test` and
+`python3 tests/check_eks_access_ordering.py` after initializing locally. The
+separate `tests/check_legacy_plan.py` utility compares exact native mock plans
+against a base revision for changes that promise identical planned values.
 
 Permission references: [Amazon RDS actions and resource types](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html),
 [AWS requested-region condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).

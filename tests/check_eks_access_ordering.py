@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify EKS access creation order in Terraform's native dependency graph.
+"""Verify EKS access and KMS creation order in Terraform's native graph.
 
 Run after local terraform init. The graph command does not refresh state or call
 AWS. Resource plan equality is checked separately by check_legacy_plan.py.
@@ -14,7 +14,7 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def assert_access_entry_dependency(graph):
+def assert_resource_dependencies(graph):
     edges = {}
     for source, target in re.findall(
         r'^\s*"([^"]+)" -> "([^"]+)"', graph, re.MULTILINE
@@ -31,6 +31,14 @@ def assert_access_entry_dependency(graph):
                 seen.add(node)
                 pending.extend(edges.get(node, ()))
         return False
+
+    kms_policy = "[root] aws_kms_key_policy.main (expand)"
+    assert reaches("[root] module.eks.aws_eks_cluster.main (expand)", kms_policy), (
+        "EKS can create its encryption grant before the KMS policy permits it"
+    )
+    assert reaches("[root] aws_kms_alias.main (expand)", kms_policy), (
+        "The key alias can be created before the KMS policy permits it"
+    )
 
     entry = "[root] module.eks.aws_eks_access_entry.admin (expand)"
     for name in ("admin", "cluster-admin"):
@@ -54,7 +62,7 @@ if __name__ == "__main__":
         text=True,
         capture_output=True,
     )
-    assert_access_entry_dependency(result.stdout)
+    assert_resource_dependencies(result.stdout)
     print(
-        "Native Terraform graph orders both EKS admin policies after access entry creation"
+        "Native Terraform graph orders EKS cluster and alias creation after the KMS policy, and EKS admin policies after their access entry"
     )

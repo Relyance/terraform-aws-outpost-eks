@@ -169,6 +169,26 @@ variable "create_kubernetes_resources" {
   default     = true
 }
 
+variable "kms_key_administrator_role_arns" {
+  description = "Same-account IAM role ARNs that administer the module KMS key. A nonempty set enables the restricted key policy. Include the Terraform execution role and a recovery role."
+  type        = set(string)
+  default     = []
+  nullable    = false
+
+  validation {
+    condition     = length(var.kms_key_administrator_role_arns) != 1
+    error_message = "Specify both the Terraform execution role and a distinct KMS recovery role, or leave the set empty."
+  }
+
+  validation {
+    condition = alltrue([
+      for arn in var.kms_key_administrator_role_arns :
+      can(regex("^arn:${data.aws_partition.current.partition}:iam::${local.account_id}:role/[A-Za-z0-9+=,.@_/-]+$", arn))
+    ])
+    error_message = "KMS key administrators must be IAM role ARNs in the deployment account and partition."
+  }
+}
+
 # S3
 
 variable "s3_bucket_suffix" {
