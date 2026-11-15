@@ -16,7 +16,7 @@ provider "aws" {
 }
 module "west" {
   source                                 = "Relyance-Ext/sierra/aws"
-  version                                = "0.10.0"
+  version                                = "0.10.1"
   providers                              = { aws = aws.west }
   create_vpc_and_eks                     = false
   existing_eks_cluster_name              = var.west_cluster_name
@@ -32,7 +32,7 @@ module "west" {
 }
 module "east" {
   source                                 = "Relyance-Ext/sierra/aws"
-  version                                = "0.10.0"
+  version                                = "0.10.1"
   providers                              = { aws = aws.east }
   create_vpc_and_eks                     = false
   existing_eks_cluster_name              = var.east_cluster_name
