@@ -15,7 +15,7 @@ provider "aws" {
   region = "us-east-1"
 }
 module "west" {
-  source                                 = "Relyance-Ext/sierra/aws"
+  source                                 = "Relyance/outpost-eks/aws"
   version                                = "0.10.1"
   providers                              = { aws = aws.west }
   create_vpc_and_eks                     = false
@@ -31,7 +31,7 @@ module "west" {
   byok_secret_write_back                 = false
 }
 module "east" {
-  source                                 = "Relyance-Ext/sierra/aws"
+  source                                 = "Relyance/outpost-eks/aws"
   version                                = "0.10.1"
   providers                              = { aws = aws.east }
   create_vpc_and_eks                     = false

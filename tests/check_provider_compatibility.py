@@ -110,7 +110,7 @@ for version in VERSIONS:
         example = source / "examples" / name
         path = example / "sierra.tf"
         local_example, replacements = re.subn(
-            r'source\s*=\s*"Relyance-Ext/sierra/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
+            r'source\s*=\s*"Relyance/outpost-eks/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
             'source = "../.."',
             path.read_text(),
         )
@@ -125,7 +125,7 @@ for version in VERSIONS:
     regional_example = source / "examples" / "multiple_existing_clusters"
     regional_path = regional_example / "main.tf"
     local_regional_example, replacements = re.subn(
-        r'source\s*=\s*"Relyance-Ext/sierra/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
+        r'source\s*=\s*"Relyance/outpost-eks/aws"\s*\n\s*version\s*=\s*"[^"\n]+"',
         'source = "../.."',
         regional_path.read_text(),
     )

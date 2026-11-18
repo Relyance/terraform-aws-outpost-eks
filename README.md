@@ -299,7 +299,7 @@ terraform {
 }
 
 module "sierra" {
-  source  = "Relyance-Ext/sierra/aws"
+  source  = "Relyance/outpost-eks/aws"
   version = "0.10.1"
 
   # The GCP project where findings data is captured
@@ -395,7 +395,7 @@ terraform {
 }
 
 module "sierra" {
-  source  = "Relyance-Ext/sierra/aws"
+  source  = "Relyance/outpost-eks/aws"
   version = "0.10.1"
 
   # The GCP project where findings data is captured
