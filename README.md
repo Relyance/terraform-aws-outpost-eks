@@ -1,2 +1,608 @@
-# terraform-aws-outpost-eks
-Public Terraform module for deploying Relyance Outpost on AWS EKS.
+# InHost Core Environment in AWS Terraform Module
+
+## Introduction
+
+This module is provided for use by customers of Relyance AI.
+Visit [relyance.ai](https://relyance.ai) to learn more about our services.
+
+## AWS provider compatibility
+
+The source module accepts `hashicorp/aws >= 5.79, < 7.0`: provider 5.79 introduced the EKS Auto Mode schema used here, and the upper bound excludes an unreviewed major release. The local submodules (`eks`, `existing_eks`, `vpc`, `s3`, and `node_pools`) have no additional AWS provider pins or remote module dependencies. Defaults and resource addresses are unchanged.
+
+Module `0.10.1` supports AWS provider 5.79 and 6.x. The examples below pin module `0.10.1` and select provider 6.x; existing callers can retain provider 5.x within the supported range. For existing state, follow HashiCorp's [provider 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) and review the customer-specific plan before applying an upgrade.
+
+`aws_region.current.name` remains in use because provider 5.79 does not expose the replacement `region` attribute. Provider 6 retains `name` with a deprecation warning. The module already uses `aws_eip.domain`, avoids removed EKS addon arguments, and uses literal booleans for launch template EBS settings. See the [provider 5.79 region schema](https://github.com/hashicorp/terraform-provider-aws/blob/v5.79.0/website/docs/d/region.html.markdown) and [provider 6 migration changes](https://github.com/hashicorp/terraform-provider-aws/blob/v6.0.0/website/docs/guides/version-6-upgrade.html.markdown).
+
+The pull request workflow runs the four-provider matrix with Terraform 1.9.8 and no cloud secrets. Run the same source compatibility checks locally with Terraform 1.9.x:
+
+```sh
+python3 tests/check_provider_compatibility.py
+# Or select exact stable provider versions:
+python3 tests/check_provider_compatibility.py 5.79.0 5.100.0 6.0.0 6.69.1
+```
+
+The harness installs real provider schemas, checks caller/module constraint intersection, validates both examples against local source, and runs mock plans for existing standard clusters, existing Auto Mode clusters, new clusters, and BYOK policy behavior. The S3 policy test uses a virtual apply to evaluate the provider's local IAM document builder, with every cloud resource overridden and fake credentials. The harness uses an empty HOME and no cloud credentials; it never applies real infrastructure. Downloads, logs and fixtures stay in ignored `.terraform/provider-compatibility/`. This establishes source/schema compatibility; it does not establish a cloud apply, state migration, deployed capacity, or customer qualification.
+
+## Usage
+
+When you have agreed to sign up for InHost,
+this module will stand up infrastructure for core environment.
+Init, plan, and apply the module, providing values:
+
+* Subnet CIDR blocks compatible with your network
+* CIDR blocks for CI/CD and administrative access
+
+In order to be functional, you must
+
+* Set up role in every data account which
+  * can read S3 buckets and decrypt using those buckets' KMS keys, if any, and
+  * has a trust policy allowing `Relyance_Sierra` to assume it, with **both** `sts:AssumeRole` and `sts:TagSession` actions (both required for EKS Pod Identity):
+    ```json
+    {
+      "Effect": "Allow",
+      "Principal": { "AWS": "arn:aws:iam::<InHost-Account-ID>:role/Relyance_Sierra" },
+      "Action": ["sts:AssumeRole", "sts:TagSession"]
+    }
+    ```
+  * We will be providing an additional Terraform module to facilitate setup.
+* Install Relyance Helm chart into the EKS cluster
+  * This is still in active development; contact Relyance for support.
+
+### Resources Created
+
+InHost development codename "Sierra" is still in use for cloud resources.
+
+All non-node resources will have the tag `relyance-inhost` set to the module version.
+
+* A VPC with subnets
+* outbound NAT + internet gateway
+* An EKS cluster `Relyance_Sierra` with node groups tuned for Sierra workloads
+* S3 buckets
+  * `relyance-work-<accountId>`: used internally
+  * `relyance-findings-<accountId>`: accessible from Relyance environment
+* KMS key for encrypting S3 buckets and EKS secrets
+
+#### Bucket transport and KMS access
+
+The findings, workspace, and optional SCI buckets require HTTPS.
+
+Set `kms_key_administrator_role_arns` to opt into the restricted policy on
+the module's existing KMS key. Supply existing IAM role ARNs in the deployment
+account. Include the role used by the Terraform AWS provider and a separately
+controlled recovery role. An empty set keeps the legacy KMS policy. When
+rotating administrator roles, add the replacement role and verify its access
+before removing the old role.
+
+```hcl
+kms_key_administrator_role_arns = [
+  "arn:aws:iam::123456789012:role/terraform-deploy",
+  "arn:aws:iam::123456789012:role/kms-recovery",
+]
+```
+
+The restricted policy removes account-wide IAM delegation. It allows the scanner,
+hosted reader, and optional SCI writer to use the key through S3 for their
+respective buckets, including objects written with or without S3 Bucket Keys.
+Use a separate key for BYOK Secrets Manager secrets.
+
+The update retains the key and its existing grants. For module-created EKS
+clusters, preserve the EKS encryption grant. Key administrators retain policy
+management and can change effective access. Review existing grants and any
+customer-managed consumers of this key before enabling the policy. Review the
+Terraform plan for an in-place policy update and verify the scanner, hosted
+reader, optional SCI writer, and EKS operations in a test installation before
+rolling it out.
+
+#### IAM resources
+
+The module creates the following roles:
+
+* `Relyance_Sierra`: Used by Kubernetes pods where Relyance's code will run
+* `Relyance_Sierra_Reader`: Used by Relyance to read from findings bucket
+  * This role has a trust policy allowing an env-specific identity to assume it.
+* `Relyance_Sierra_Node` and `Relyance_Sierra_Auto` for EKS nodes (only when `create_vpc_and_eks = true`)
+* `Relyance_Sierra_Cluster`: Used by the cluster itself (only when `create_vpc_and_eks = true`)
+* `Relyance_Sierra_SCI`: Used for source code analysis (only when `code_analysis_enabled = true`)
+* `Relyance_Sierra_Datadog`: Used by Datadog agent for log forwarding (only when `enable_datadog = true`)
+
+The `Relyance_Sierra` role gets an inline policy `byok-secrets` only when `byok_secret_arn_patterns` is set.
+See [BYOK secrets in AWS Secrets Manager](#byok-secrets-in-aws-secrets-manager).
+
+In addition to permissions directly on module resources,
+these roles are granted account-level permissions by attaching standard policies:
+
+* `AmazonEKSWorkerNodePolicy`
+* `AmazonEKS_CNI_Policy`
+* `AmazonEC2ContainerRegistryReadOnly`
+* `AmazonEKSClusterPolicy`
+
+Finally, on order to scan, the `Relyance_Sierra` role is
+granted `sts:AssumeRole` in accounts listed in `assumable_account_ids`
+(or any account by setting `assume_all_roles` flag to true)
+
+#### Auto-mode Node Tags
+
+By default, AWS auto mode does not let you apply tags to nodes created by auto mode.
+If your AWS tag policy requires that nodes have certain tags to be created, and/or
+if a cleanup process will remove any nodes without those tags, additional steps are
+required to set up alternative node class and node pools.
+
+* Set all required tags into the `default_tags` variable
+* Set the `enable_auto_mode_node_tags` flag to true
+* Ensure that you have sufficient privileges to run `aws eks get-token` on the new cluster
+  * `eks_make_terraform_deployer_admin`, which defaults true, should guarantee this access.
+* Ensure that you have a network route to the control plane
+  * Add CIDR containing your current public address (or VPN egress address) to `eks_public_access_cidrs`
+  * If you want to use internal connectivity,
+    * plan and apply first with `create_kubernetes_resources = false`,
+    * establish network route and private DNS to the cluster's private control plane, and
+    * plan and apply again with `create_kubernetes_resources` removed (default is `true`).
+* Ensure that all InHost pods run on the custom nodeclass `relyance-inhost`
+  * In Relyance-provided Helm, set `aws.nodeclass: relyance-sierra` in your tenant-specific values file.
+
+#### Kubernetes namespace binding
+
+EKS Pod Identity binds the `Relyance_Sierra` role to one namespace and one service account.
+The module always binds namespace `sierra`, service account `relyance`.
+Existing Helm deployments run in namespace `sierra`.
+
+The kustomize deployment package deploys into namespace `inhost` by default.
+Pods in a namespace without an association get no AWS credentials, and every scan fails.
+For a kustomize deployment in namespace `inhost`, set:
+
+```hcl
+additional_service_account_namespaces = ["inhost"]
+```
+
+Each entry adds one association for service account `relyance` in that namespace.
+The existing `sierra` association does not change.
+A new association can take a few minutes to become active.
+
+### BYOK secrets in AWS Secrets Manager
+
+An InHost BYOK connection can reference an AWS Secrets Manager secret instead of a Kubernetes secret.
+The customer creates the secret in this account and enters the secret ARN in the connection's authentication step.
+Relyance stores only the ARN. Relyance does not receive the secret value.
+The scanner reads the secret at scan time with the `Relyance_Sierra` role.
+The scanner calls Secrets Manager in the region of the secret ARN.
+
+The secret value is a JSON object that the Relyance Integrations screen generates for the connection.
+It holds every required credential field of the authentication method, secret and non-secret,
+except top-level fields such as `data_storage_location`, which stay in the Relyance form.
+Non-secret fields and checkbox or dropdown options that have a form default can be omitted;
+the scanner uses the form default.
+Use one secret for each connection.
+The recommended name is `relyance/inhost/<vendor>/<connection-id>`.
+
+To grant access, set:
+
+```hcl
+byok_secret_arn_patterns = [
+  "arn:aws:secretsmanager:us-west-2:111122223333:secret:relyance/inhost/*",
+]
+
+# Only for secrets encrypted with a customer-managed KMS key.
+byok_secret_kms_key_arns = [
+  "arn:aws:kms:us-west-2:111122223333:key/1234abcd-12ab-34cd-56ef-1234567890ab",
+]
+
+# Default is true. Set false for read-only secrets.
+byok_secret_write_back = true
+```
+
+#### Token write-back
+
+When write-back is on, the scanner writes to the secret only when a token refresh changes a token.
+It writes only the changed keys, merged onto the current secret value.
+It writes nothing when it only reads the secret.
+If a write-back fails (for example, `AccessDenied`), the scanner logs the failure with a reason code
+and continues the scan with the refreshed token in memory. The scan does not fail.
+
+`byok_secret_write_back` controls only the IAM permissions.
+The deployment has its own switch, which must have the same value.
+Use the module output `byok_secret_write_back`:
+
+* Helm chart: value `byokSecretWriteBack` (default `true`).
+* Kustomize package: env var `SECRET_REF_WRITE_BACK` (`"true"` or `"false"`, default `"true"`).
+
+When the switch is `false`, the scanner never writes to the secret.
+Vendors with static credentials are not affected.
+Vendors that rotate refresh tokens fail after the first token refresh, because the secret keeps the old refresh token.
+
+Do not turn on automatic rotation (Secrets Manager rotation with a Lambda function) for a secret of an OAuth
+connection that uses a refresh token. A rotation can replace the secret value after the scanner writes a refreshed token.
+The secret then has an old refresh token that the vendor does not accept, and the next scan fails authentication.
+
+The module then adds the inline policy `byok-secrets` to the `Relyance_Sierra` role:
+
+| Condition | Actions | Resources |
+|---|---|---|
+| Always | `secretsmanager:GetSecretValue` | `byok_secret_arn_patterns` |
+| `byok_secret_write_back = true` | `secretsmanager:PutSecretValue` | `byok_secret_arn_patterns` |
+| `byok_secret_kms_key_arns` is set | `kms:Decrypt` | `byok_secret_kms_key_arns` |
+| `byok_secret_kms_key_arns` is set and `byok_secret_write_back = true` | `kms:GenerateDataKey` | `byok_secret_kms_key_arns` |
+
+Notes:
+
+* A secret ARN ends with a random six-character suffix, for example `relyance/inhost/asana/5-AbC123`.
+  End each pattern with `*`. A prefix pattern also covers new connections without a Terraform change.
+* The KMS statement has a `kms:ViaService` condition. The role can use the keys only through Secrets Manager.
+  * If every pattern in `byok_secret_arn_patterns` has a literal region, the condition is
+    `StringEquals kms:ViaService = secretsmanager.<region>.<dns suffix>` for the module region and each of those regions.
+  * If a pattern has a wildcard in the region (for example `arn:aws:secretsmanager:*:...`), the condition is
+    `StringLike kms:ViaService = secretsmanager.*.<dns suffix>`, so secrets in any region can be decrypted.
+  * `<dns suffix>` is the DNS suffix of the partition: `amazonaws.com`, or `amazonaws.com.cn` in `aws-cn`.
+* The AWS managed key `aws/secretsmanager` needs no entry in `byok_secret_kms_key_arns`.
+* If the key policy of a customer-managed key does not delegate to IAM policies, the key policy must also allow the role.
+  Example key policy statement:
+
+  ```json
+  {
+    "Sid": "AllowRelyanceScannerViaSecretsManager",
+    "Effect": "Allow",
+    "Principal": { "AWS": "arn:aws:iam::111122223333:role/Relyance_Sierra" },
+    "Action": ["kms:Decrypt", "kms:GenerateDataKey"],
+    "Resource": "*",
+    "Condition": {
+      "StringEquals": { "kms:ViaService": "secretsmanager.us-west-2.amazonaws.com" }
+    }
+  }
+  ```
+
+  Remove `kms:GenerateDataKey` if `byok_secret_write_back = false`.
+* A secret resource policy is optional for secrets in this account. If a secret has a resource policy with an explicit `Deny`, the policy must not deny the `Relyance_Sierra` role.
+* Secrets in another AWS account are not supported in this version.
+* If `byok_secret_write_back = false`, set `byokSecretWriteBack: false` (Helm) or `SECRET_REF_WRITE_BACK: "false"` (kustomize).
+  See [Token write-back](#token-write-back).
+* The pods must run in a namespace with a Pod Identity association.
+  See [Kubernetes namespace binding](#kubernetes-namespace-binding).
+
+### Alternate mode: use existing EKS cluster
+
+By setting
+* `create_vpc_and_eks = false`
+* `existing_eks_cluster_name = "Customer-Cluster"`
+
+you can deploy Relyance InHost into your existing EKS cluster (both Auto Mode and standard clusters are supported).
+In this mode, the Terraform module only creates
+* S3 buckets
+* KMS key (used only for S3 bucket encryption)
+* `Relyance_Sierra` and `Relyance_Sierra_Reader` roles and associated policies
+
+## Known limitations
+
+* EKS access is only supported on public endpoint from allowed IPv4 CIDR blocks.
+
+## Examples
+
+### Full stack creation
+
+<!-- HCL below should be in sync with examples/create_cluster/sierra.tf -->
+```hcl
+# Single file with everything you need.
+# For local consistency during updates, run
+#     terraform init
+#     terraform plan -out sierra.tfplan
+#     terraform apply sierra.tfplan
+# For collaboration, configure backend for shared remote state file
+# For maintainability, replace hard-coded values with variables or outputs from other modules
+
+# Sierra 0.10.1 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.0, < 7.0"
+    }
+  }
+}
+
+module "sierra" {
+  source  = "Relyance-Ext/sierra/aws"
+  version = "0.10.1"
+
+  # The GCP project where findings data is captured
+  # To be provided by Relyance; required if code_analysis_enabled is true
+  # gcp_project = "example-project"
+
+  # Update these to match your AWS environment
+
+  # Networking: Pick ranges which don't conflict with your existing environment.
+  vpc_cidr     = "172.30.0.0/16"
+  service_cidr = "10.100.0.0/16"
+
+  subnet_cidrs = {
+    usw2-az1 = "172.30.0.0/20"
+    usw2-az2 = "172.30.16.0/20"
+    usw2-az3 = "172.30.32.0/20"
+    usw2-az4 = "172.30.48.0/20"
+  }
+
+  nat_subnet_cidr = "172.30.255.0/24" # Maybe overkill for a single NAT
+
+  # EKS
+  eks_public_access_cidrs = [
+    # Include at least one CI/CD, admin env, developer VPN, etc.
+  ]
+
+  # Cross-account scan access
+  assumable_account_ids = [] # You must set at least one account ID, or set flag `assume_all_roles`
+
+  # The default value, true, makes Terraform applier a Kubernetes admin for later Helm deploy
+  eks_make_terraform_deployer_admin = true
+  # named IAM principal ARNs for additional admins
+  eks_kubectl_admins = {}
+
+  # Enable Code Analyzer support
+  code_analysis_enabled = false
+
+  # Give bucket read access to additional principals for diagnostics and troubleshooting
+  s3_read_access_principals = []
+
+  # Tags to apply in all resources (e.g. for compliance with organization tag policy)
+  default_tags = {
+    # key = value
+  }
+
+  # If your org enforces tag policy, set true to support auto mode nodes with default_tags applied
+  enable_auto_mode_node_tags = false
+  # Kustomize deployments run in namespace "inhost". Bind it to the scanner role.
+  additional_service_account_namespaces = []
+
+  # BYOK connection secrets in AWS Secrets Manager (empty list = no access granted)
+  byok_secret_arn_patterns = [
+    # "arn:aws:secretsmanager:us-west-2:111122223333:secret:relyance/inhost/*",
+  ]
+}
+
+provider "aws" {
+  default_tags {
+    # Set tags in var.default_tags to add to all resources, including dynamically-created.
+    tags = module.sierra.default_tags
+  }
+}
+
+output "sierra" {
+  description = "Information to provide to Relyance"
+  value       = module.sierra
+}
+```
+
+### Reuse existing EKS cluster
+
+Create S3 buckets, KMS key, and IAM identities for use with an existing cluster.
+Remember, the cluster should be auto mode, with EKS pod identity agent addon installed.
+<!-- HCL below should be in sync with examples/use_existing_cluster/sierra.tf -->
+```hcl
+# Single file with everything you need.
+# For local consistency during updates, run
+#     terraform init
+#     terraform plan -out sierra.tfplan
+#     terraform apply sierra.tfplan
+# For collaboration, configure backend for shared remote state file
+# For maintainability, replace hard-coded values with variables or outputs from other modules
+
+# Sierra 0.10.1 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+terraform {
+  required_version = "~> 1.9"
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = ">= 6.0, < 7.0"
+    }
+  }
+}
+
+module "sierra" {
+  source  = "Relyance-Ext/sierra/aws"
+  version = "0.10.1"
+
+  # The GCP project where findings data is captured
+  # To be provided by Relyance; required if code_analysis_enabled is true
+  # gcp_project = "example-project"
+
+  # Update these to match your AWS environment
+  create_vpc_and_eks = false
+  # Supports both auto mode and standard mode clusters with eks-pod-identity-agent addon installed
+  # Set to true if using an auto mode cluster
+  require_existing_eks_cluster_auto_mode = false
+  existing_eks_cluster_name              = "Customer-Cluster"
+
+  # Cross-account scan access
+  assumable_account_ids = [] # You must set at least one account ID, or set flag `assume_all_roles`
+
+  # Enable Code Analyzer support
+  code_analysis_enabled = false
+
+  # Give bucket read access to additional principals for diagnostics and troubleshooting
+  s3_read_access_principals = []
+
+  # Tags to apply in all resources (e.g. for compliance with organization tag policy)
+  default_tags = {
+    # key = value
+  }
+  # Kustomize deployments run in namespace "inhost". Bind it to the scanner role.
+  additional_service_account_namespaces = []
+
+  # BYOK connection secrets in AWS Secrets Manager (empty list = no access granted)
+  byok_secret_arn_patterns = [
+    # "arn:aws:secretsmanager:us-west-2:111122223333:secret:relyance/inhost/*",
+  ]
+}
+
+provider "aws" {
+  default_tags {
+    # Set tags in var.default_tags to add to all resources, including dynamically-created.
+    tags = module.sierra.default_tags
+  }
+}
+
+output "sierra" {
+  description = "Information to provide to Relyance"
+  value       = module.sierra
+}
+```
+
+<!-- Everything below this line is output from terraform-docs markdown table -->
+
+<!-- BEGIN_TF_DOCS -->
+## Requirements
+
+| Name | Version |
+|------|---------|
+| <a name="requirement_terraform"></a> [terraform](#requirement\_terraform) | ~> 1.9 |
+| <a name="requirement_aws"></a> [aws](#requirement\_aws) | >= 5.79, < 7.0 |
+
+## Providers
+
+| Name | Version |
+|------|---------|
+| <a name="provider_aws"></a> [aws](#provider\_aws) | >= 5.79, < 7.0 |
+| <a name="provider_http"></a> [http](#provider\_http) | n/a |
+| <a name="provider_random"></a> [random](#provider\_random) | n/a |
+| <a name="provider_terraform"></a> [terraform](#provider\_terraform) | n/a |
+
+## Modules
+
+| Name | Source | Version |
+|------|--------|---------|
+| <a name="module_eks"></a> [eks](#module\_eks) | ./modules/eks | n/a |
+| <a name="module_existing_eks"></a> [existing\_eks](#module\_existing\_eks) | ./modules/existing_eks | n/a |
+| <a name="module_findings_bucket"></a> [findings\_bucket](#module\_findings\_bucket) | ./modules/s3 | n/a |
+| <a name="module_node_pools"></a> [node\_pools](#module\_node\_pools) | ./modules/node_pools | n/a |
+| <a name="module_sci_bucket"></a> [sci\_bucket](#module\_sci\_bucket) | ./modules/s3 | n/a |
+| <a name="module_vpc"></a> [vpc](#module\_vpc) | ./modules/vpc | n/a |
+| <a name="module_work_bucket"></a> [work\_bucket](#module\_work\_bucket) | ./modules/s3 | n/a |
+
+## Resources
+
+| Name | Type |
+|------|------|
+| [aws_eks_pod_identity_association.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/eks_pod_identity_association) | resource |
+| [aws_iam_role.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.reader](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role.sci](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role) | resource |
+| [aws_iam_role_policy.byok_secrets](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_iam_role_policy.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/iam_role_policy) | resource |
+| [aws_kms_alias.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_alias) | resource |
+| [aws_kms_key.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key) | resource |
+| [aws_kms_key_policy.main](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/resources/kms_key_policy) | resource |
+| [random_uuid.reader_external_id](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/uuid) | resource |
+| [terraform_data.explain_kube_access](https://registry.terraform.io/providers/hashicorp/terraform/latest/docs/resources/data) | resource |
+| [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_iam_policy_document.main_kms_key](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_policy_document.sci_assume_role_with_web_identity](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_policy_document) | data source |
+| [aws_iam_session_context.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/iam_session_context) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
+| [http_http.control_plane_access](https://registry.terraform.io/providers/hashicorp/http/latest/docs/data-sources/http) | data source |
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|:--------:|
+| <a name="input_additional_service_account_namespaces"></a> [additional\_service\_account\_namespaces](#input\_additional\_service\_account\_namespaces) | Additional Kubernetes namespaces whose 'relyance' service account gets the Relyance\_Sierra role through EKS Pod Identity. The 'sierra' namespace is always bound. Add 'inhost' for the kustomize deployment package, which deploys into namespace 'inhost' by default. | `list(string)` | `[]` | no |
+| <a name="input_assumable_account_ids"></a> [assumable\_account\_ids](#input\_assumable\_account\_ids) | List of account IDs where resources can be assumed. | `list(string)` | `[]` | no |
+| <a name="input_assume_all_roles"></a> [assume\_all\_roles](#input\_assume\_all\_roles) | Enable role assumption on all resources | `bool` | `false` | no |
+| <a name="input_base_name"></a> [base\_name](#input\_base\_name) | base name for all resources | `string` | `"Relyance_Sierra"` | no |
+| <a name="input_byok_secret_arn_patterns"></a> [byok\_secret\_arn\_patterns](#input\_byok\_secret\_arn\_patterns) | ARNs or ARN patterns of the AWS Secrets Manager secrets that hold InHost BYOK connection credentials. The scanner role gets read access (and write access if byok\_secret\_write\_back is true) to these secrets. Example: arn:aws:secretsmanager:us-west-2:111122223333:secret:relyance/inhost/*. An empty list creates no policy. | `list(string)` | `[]` | no |
+| <a name="input_byok_secret_kms_key_arns"></a> [byok\_secret\_kms\_key\_arns](#input\_byok\_secret\_kms\_key\_arns) | ARNs of the customer-managed KMS keys that encrypt the secrets in byok\_secret\_arn\_patterns. The scanner role gets kms:Decrypt (and kms:GenerateDataKey if byok\_secret\_write\_back is true), only through Secrets Manager. Leave empty for secrets encrypted with the AWS managed key aws/secretsmanager. | `list(string)` | `[]` | no |
+| <a name="input_byok_secret_write_back"></a> [byok\_secret\_write\_back](#input\_byok\_secret\_write\_back) | If true, the scanner role gets secretsmanager:PutSecretValue on byok\_secret\_arn\_patterns (and kms:GenerateDataKey on byok\_secret\_kms\_key\_arns). The scanner uses it only when a token refresh changes a token: it writes the changed keys, merged onto the current secret value. A failed write-back is logged and the scan continues with the in-memory token. Set false for read-only secrets, and set the same value in the deployment (output byok\_secret\_write\_back; Helm value byokSecretWriteBack or env var SECRET\_REF\_WRITE\_BACK). With write-back off, vendors that rotate refresh tokens fail after the first refresh; vendors with static credentials are not affected. | `bool` | `true` | no |
+| <a name="input_code_analysis_enabled"></a> [code\_analysis\_enabled](#input\_code\_analysis\_enabled) | Create related resources and set up cross-cloud role assumption for the Code Analyzer | `bool` | `false` | no |
+| <a name="input_create_kubernetes_resources"></a> [create\_kubernetes\_resources](#input\_create\_kubernetes\_resources) | Set false to skip Kubernetes resource creation until you can establish network access to EKS control plane and AWS auth | `bool` | `true` | no |
+| <a name="input_create_vpc_and_eks"></a> [create\_vpc\_and\_eks](#input\_create\_vpc\_and\_eks) | If false, assumes external VPC and EKS exist and skips their creation | `bool` | `true` | no |
+| <a name="input_default_tags"></a> [default\_tags](#input\_default\_tags) | Tags to apply to all AWS resources. Use instead of setting on aws provider to apply to dynamic resources. | `map(string)` | `{}` | no |
+| <a name="input_eks_kubectl_admins"></a> [eks\_kubectl\_admins](#input\_eks\_kubectl\_admins) | map of unique IDs to IAM identity ARNs to make admin + cluster admin | `map(string)` | `{}` | no |
+| <a name="input_eks_make_terraform_deployer_admin"></a> [eks\_make\_terraform\_deployer\_admin](#input\_eks\_make\_terraform\_deployer\_admin) | If set, AWS identity performing Terraform deploy will gain kubectl access | `bool` | `true` | no |
+| <a name="input_eks_public_access_cidrs"></a> [eks\_public\_access\_cidrs](#input\_eks\_public\_access\_cidrs) | Allow EKS control plane access from the internet? | `list(string)` | `[]` | no |
+| <a name="input_eks_require_metadata_token"></a> [eks\_require\_metadata\_token](#input\_eks\_require\_metadata\_token) | If true, enforce more secure and modern IMDSv2 | `bool` | `true` | no |
+| <a name="input_enable_auto_mode_node_tags"></a> [enable\_auto\_mode\_node\_tags](#input\_enable\_auto\_mode\_node\_tags) | Set true to apply default\_tags to auto mode nodes | `bool` | `false` | no |
+| <a name="input_enable_datadog"></a> [enable\_datadog](#input\_enable\_datadog) | Enable Datadog log forwarding for Sierra workloads. Creates an AWS Secrets Manager secret slot, IAM role, and EKS Pod Identity association. After applying, populate the secret with the API key provided by Relyance. | `bool` | `false` | no |
+| <a name="input_env"></a> [env](#input\_env) | What environment are you accessing [stage, prod]? | `string` | `"prod"` | no |
+| <a name="input_existing_eks_cluster_name"></a> [existing\_eks\_cluster\_name](#input\_existing\_eks\_cluster\_name) | Name of existing EKS cluster to use when create\_vpc\_and\_eks is false | `string` | `null` | no |
+| <a name="input_gcp_project"></a> [gcp\_project](#input\_gcp\_project) | The GCP project name in Relyance used to facilitate cross-cloud communication | `string` | `null` | no |
+| <a name="input_kms_key_administrator_role_arns"></a> [kms\_key\_administrator\_role\_arns](#input_kms_key_administrator_role_arns) | Same-account IAM administrator role ARNs. A nonempty set enables the restricted KMS key policy. | `set(string)` | `[]` | no |
+| <a name="input_nat_subnet_cidr"></a> [nat\_subnet\_cidr](#input\_nat\_subnet\_cidr) | CIDR block for the outbound NAT's public subnet | `string` | `""` | no |
+| <a name="input_override_service_account"></a> [override\_service\_account](#input\_override\_service\_account) | Override service account name used for pod identity (testing only – do not use in production) | `string` | `null` | no |
+| <a name="input_require_existing_eks_cluster_addons"></a> [require\_existing\_eks\_cluster\_addons](#input\_require\_existing\_eks\_cluster\_addons) | Set false to allow existing EKS cluster without expected addons | `bool` | `true` | no |
+| <a name="input_require_existing_eks_cluster_auto_mode"></a> [require\_existing\_eks\_cluster\_auto\_mode](#input\_require\_existing\_eks\_cluster\_auto\_mode) | Set false to allow existing EKS cluster not in auto mode | `bool` | `true` | no |
+| <a name="input_s3_bucket_suffix"></a> [s3\_bucket\_suffix](#input\_s3\_bucket\_suffix) | Suffix to add to bucket name to avoid (unexpected) collision. Contact Relyance if set | `string` | `""` | no |
+| <a name="input_s3_expiration_days"></a> [s3\_expiration\_days](#input\_s3\_expiration\_days) | Number of days before objects in S3 findings bucket expire | `number` | `180` | no |
+| <a name="input_s3_read_access_principals"></a> [s3\_read\_access\_principals](#input\_s3\_read\_access\_principals) | Supplemental list of role/user ARNs for read access to the findings bucket | `list(string)` | `[]` | no |
+| <a name="input_s3_use_bucket_keys"></a> [s3\_use\_bucket\_keys](#input\_s3\_use\_bucket\_keys) | Enable bucket keys to reduce KMS costs in the S3 findings bucket | `bool` | `true` | no |
+| <a name="input_s3_workspace_expiration_days"></a> [s3\_workspace\_expiration\_days](#input\_s3\_workspace\_expiration\_days) | Number of days before objects in S3 workspace bucket expire | `number` | `7` | no |
+| <a name="input_service_cidr"></a> [service\_cidr](#input\_service\_cidr) | CIDR block (at least 16-bits large) for EKS services (null for default autoassign) | `string` | `""` | no |
+| <a name="input_subnet_cidrs"></a> [subnet\_cidrs](#input\_subnet\_cidrs) | Map of AZ to CIDR block. Must have entry for every AZ in region | `map(string)` | `{}` | no |
+| <a name="input_vpc_cidr"></a> [vpc\_cidr](#input\_vpc\_cidr) | CIDR block (at least 16-bits large) for VPC | `string` | `""` | no |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| <a name="output_aws_account_id"></a> [aws\_account\_id](#output\_aws\_account\_id) | AWS account ID where this module is deployed |
+| <a name="output_byok_secret_write_back"></a> [byok\_secret\_write\_back](#output\_byok\_secret\_write\_back) | Whether the scanner role may write refreshed OAuth tokens back to BYOK secrets (var.byok\_secret\_write\_back). Pass it to the deployment: Helm value byokSecretWriteBack, or env var SECRET\_REF\_WRITE\_BACK ("true"/"false") in the kustomize package. The two must match: with false here and write-back on in the deployment, each write-back is denied and logged. |
+| <a name="output_cluster_created_by_module"></a> [cluster\_created\_by\_module](#output\_cluster\_created\_by\_module) | Whether the EKS cluster was created by this module (true) or an existing cluster was used (false) |
+| <a name="output_default_tags"></a> [default\_tags](#output\_default\_tags) | Tags to be applied to all resources |
+| <a name="output_eks_cluster_auto_mode"></a> [eks\_cluster\_auto\_mode](#output\_eks\_cluster\_auto\_mode) | Whether the EKS cluster is running in auto mode. Always true for module-created clusters. |
+| <a name="output_findings_object_deletion"></a> [findings\_object\_deletion](#output\_findings\_object\_deletion) | Applied deletion capability for this dedicated findings bucket. Pass unchanged to deployment provisioning. Allows ordinary object deletion and permanent deletion of every version throughout this bucket for the scanner role. Older modules without this output keep deployment deletion gates off. |
+| <a name="output_enable_auto_mode_node_tags"></a> [enable\_auto\_mode\_node\_tags](#output\_enable\_auto\_mode\_node\_tags) | Is there support for auto mode nodes with custom tags? |
+| <a name="output_oidc_issuer"></a> [oidc\_issuer](#output\_oidc\_issuer) | OIDC URL to be provided to Relyance for cross-cloud access |
+| <a name="output_reader_external_id"></a> [reader\_external\_id](#output\_reader\_external\_id) | External ID required to be passed for the STS assume-role |
+<!-- END_TF_DOCS -->
+
+### Findings object deletion
+
+The scanner role has read, write and delete access throughout the dedicated
+findings bucket, including `s3:DeleteObject` and `s3:DeleteObjectVersion`.
+This covers all matching object versions and all sessions of that role. The
+reader role remains read-only; other customer buckets receive no new grant.
+
+Pass the applied `findings_object_deletion` output unchanged to deployment
+provisioning. Its three fields are `enabled`, `account_id` and `bucket`. Older
+modules without that output keep deployment deletion gates off. This capability
+does not itself schedule Delta compaction, vacuum or noncurrent-version expiry.
+
+### Regional provisioning facts (0.10.0)
+
+Module `0.10.0` adds optional regional provisioning facts and regional RDS metadata
+discovery. Existing installations retain their old outputs, resource addresses and
+names. The `relyance-inhost` version tag on non-node resources changes to `0.10.0`;
+node version tags remain unchanged. Review the plan against existing state before
+applying an upgrade; a release does not migrate an installation into regional mode.
+An explicit `deployment_id`/positive `route_revision` pair emits nonsecret
+`provisioning_facts` from actual provider/resource values: account, partition,
+region, issuer, scanner/reader roles, work/findings URIs and bucket ownership.
+Leave the pair null for legacy behavior. Regional inputs require a distinct
+`base_name` and nonempty `s3_bucket_suffix` to avoid same-account ownership
+collisions. See `examples/multiple_existing_clusters` for the existing-cluster
+path, pinned to module `0.10.1`.
+
+Optional exact `inventory_uri` and `outbox_uri` must be supplied together, use
+this installation's reader-authorized findings bucket for inventory and an existing
+work/findings bucket for outbox, with disjoint canonical nonempty prefixes. They create no storage resources and grant no additional IAM.
+Null preserves GAI-only/legacy behavior. Preserve historical prefixes explicitly;
+these source outputs do not migrate roots or qualify DP/inventory execution.
+The reader external ID remains outside this nonsecret output and follows its
+existing separate custody channel. Publication and applied customer validation
+remain separate reviewed gates.
+
+Regional worker roles receive only `rds:DescribeDBInstances` and
+`rds:DescribeDBClusters` for endpoint metadata discovery. Their
+`aws:RequestedRegion` condition uses the actual AWS provider region. Discovery
+lists resources without a known database identifier, so this statement uses
+`Resource = "*"`; the AWS service authorization reference also documents `db`
+and `cluster` resource types for resource-specific requests. Legacy installations
+with a null `deployment_id` retain their exact prior inline policy. These
+metadata actions do not grant SQL access or IAM database authentication;
+connection-specific IAM roles retain their separate permissions.
+
+When creating a cluster, both admin policy associations reference their matching
+EKS access entry so Terraform creates that entry first. Cluster and key alias
+creation also wait for the key policy. To verify these dependencies and both
+cluster modes without AWS calls, run `terraform test` and
+`python3 tests/check_eks_access_ordering.py` after initializing locally. The
+separate `tests/check_legacy_plan.py` utility compares exact native mock plans
+against a base revision for changes that promise identical planned values.
+
+Permission references: [Amazon RDS actions and resource types](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html),
+[AWS requested-region condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
