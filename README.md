@@ -9,7 +9,7 @@ Visit [relyance.ai](https://relyance.ai) to learn more about our services.
 
 The source module accepts `hashicorp/aws >= 5.79, < 7.0`: provider 5.79 introduced the EKS Auto Mode schema used here, and the upper bound excludes an unreviewed major release. The local submodules (`eks`, `existing_eks`, `vpc`, `s3`, and `node_pools`) have no additional AWS provider pins or remote module dependencies. Defaults and resource addresses are unchanged.
 
-Module `0.10.1` supports AWS provider 5.79 and 6.x. The examples below pin module `0.10.1` and select provider 6.x; existing callers can retain provider 5.x within the supported range. For existing state, follow HashiCorp's [provider 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) and review the customer-specific plan before applying an upgrade.
+Module `0.10.3` supports AWS provider 5.79 and 6.x. The examples below pin module `0.10.3` and select provider 6.x; existing callers can retain provider 5.x within the supported range. For existing state, follow HashiCorp's [provider 6 upgrade guide](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/guides/version-6-upgrade) and review the customer-specific plan before applying an upgrade.
 
 `aws_region.current.name` remains in use because provider 5.79 does not expose the replacement `region` attribute. Provider 6 retains `name` with a deprecation warning. The module already uses `aws_eip.domain`, avoids removed EKS addon arguments, and uses literal booleans for launch template EBS settings. See the [provider 5.79 region schema](https://github.com/hashicorp/terraform-provider-aws/blob/v5.79.0/website/docs/d/region.html.markdown) and [provider 6 migration changes](https://github.com/hashicorp/terraform-provider-aws/blob/v6.0.0/website/docs/guides/version-6-upgrade.html.markdown).
 
@@ -287,7 +287,7 @@ In this mode, the Terraform module only creates
 # For collaboration, configure backend for shared remote state file
 # For maintainability, replace hard-coded values with variables or outputs from other modules
 
-# Sierra 0.10.1 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+# Sierra 0.10.3 supports AWS providers 5.79 and 6.x; this example selects 6.x.
 terraform {
   required_version = "~> 1.9"
   required_providers {
@@ -300,7 +300,7 @@ terraform {
 
 module "sierra" {
   source  = "Relyance/outpost-eks/aws"
-  version = "0.10.1"
+  version = "0.10.3"
 
   # The GCP project where findings data is captured
   # To be provided by Relyance; required if code_analysis_enabled is true
@@ -383,7 +383,7 @@ Remember, the cluster should be auto mode, with EKS pod identity agent addon ins
 # For collaboration, configure backend for shared remote state file
 # For maintainability, replace hard-coded values with variables or outputs from other modules
 
-# Sierra 0.10.1 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+# Sierra 0.10.3 supports AWS providers 5.79 and 6.x; this example selects 6.x.
 terraform {
   required_version = "~> 1.9"
   required_providers {
@@ -396,7 +396,7 @@ terraform {
 
 module "sierra" {
   source  = "Relyance/outpost-eks/aws"
-  version = "0.10.1"
+  version = "0.10.3"
 
   # The GCP project where findings data is captured
   # To be provided by Relyance; required if code_analysis_enabled is true
@@ -575,7 +575,7 @@ region, issuer, scanner/reader roles, work/findings URIs and bucket ownership.
 Leave the pair null for legacy behavior. Regional inputs require a distinct
 `base_name` and nonempty `s3_bucket_suffix` to avoid same-account ownership
 collisions. See `examples/multiple_existing_clusters` for the existing-cluster
-path, pinned to module `0.10.1`.
+path, pinned to module `0.10.3`.
 
 Optional exact `inventory_uri` and `outbox_uri` must be supplied together, use
 this installation's reader-authorized findings bucket for inventory and an existing
@@ -606,3 +606,25 @@ against a base revision for changes that promise identical planned values.
 
 Permission references: [Amazon RDS actions and resource types](https://docs.aws.amazon.com/service-authorization/latest/reference/list_rds.html),
 [AWS requested-region condition](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_policies_condition-keys.html#condition-keys-requestedregion).
+
+
+## Upgrading an original single-NAT installation
+
+Installations created by Sierra 0.6.0 used one NAT gateway, an unsplit NAT subnet,
+and a default route in the VPC main route table. Before changing the module
+source or version, retain the existing module block name and all networking
+inputs, and set `preserve_legacy_single_nat = true` in that same module block.
+Keep this value on subsequent applies. Do not set it on a deployment that already
+uses the two-NAT layout; that would request a networking downgrade.
+
+The compatibility mode keeps the original subnet CIDR, gateway, EIP and routing.
+Terraform `moved` blocks migrate the original resource addresses without deleting
+or recreating those objects. Existing single-NAT availability and cost remain.
+New installations retain the default two-NAT layout with this option unset.
+
+Use the existing backend, workspace and state. Review a saved native Terraform
+plan before apply. Network resources should have no create, destroy or replace
+actions; inspect any unexpected networking update. Do not remove/reimport state
+or recreate a Terraform root as an upgrade shortcut. The automated migration test
+uses virtual state and mock providers, and does not establish a customer's live
+AWS plan or current state.

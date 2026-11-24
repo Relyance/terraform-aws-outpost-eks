@@ -108,6 +108,12 @@ variable "subnet_cidrs" {
   default     = {}
 }
 
+variable "preserve_legacy_single_nat" {
+  description = "Preserve the original pre-0.6.1 single NAT gateway, unsplit NAT subnet, and VPC main-table route during an existing installation upgrade. Keep false for installations already using the two-NAT layout. Set this before upgrading and retain it on subsequent applies."
+  type        = bool
+  default     = false
+}
+
 variable "nat_subnet_cidr" {
   description = "CIDR block for the outbound NAT's public subnet"
   type        = string
