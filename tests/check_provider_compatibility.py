@@ -145,4 +145,10 @@ for version in VERSIONS:
     run(s3, "init", "-backend=false", "-input=false", "-no-color")
     run(s3, "validate", "-no-color")
     run(s3, "test", "-no-color")
+    vpc = source / "modules" / "vpc"
+    pin(vpc, version)
+    shutil.copy(wrapper / ".terraform.lock.hcl", vpc / ".terraform.lock.hcl")
+    run(vpc, "init", "-backend=false", "-input=false", "-no-color")
+    run(vpc, "validate", "-no-color")
+    run(vpc, "test", "-no-color")
 print(f"All provider compatibility checks passed: {', '.join(VERSIONS)}")

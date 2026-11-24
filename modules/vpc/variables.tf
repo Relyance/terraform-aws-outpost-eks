@@ -25,6 +25,12 @@ variable "subnet_cidrs" {
   }
 }
 
+variable "preserve_legacy_single_nat" {
+  description = "Preserve the original pre-0.6.1 single NAT gateway, unsplit NAT subnet, and VPC main-table route during an existing installation upgrade. Keep false for installations already using the two-NAT layout. Set this before upgrading and retain it on subsequent applies."
+  type        = bool
+  default     = false
+}
+
 variable "nat_subnet_cidr" {
   description = "CIDR block for the public subnets used by NAT gateways (will be split into two equal-size subnets; must be /27 or larger so result is at least /28)"
   type        = string
@@ -37,9 +43,9 @@ variable "nat_subnet_cidr" {
   validation {
     condition = (
       can(regex("/(\\d+)$", var.nat_subnet_cidr)) &&
-      tonumber(regex("/(\\d+)$", var.nat_subnet_cidr)[0]) <= 27
+      tonumber(regex("/(\\d+)$", var.nat_subnet_cidr)[0]) <= (var.preserve_legacy_single_nat ? 28 : 27)
     )
-    error_message = "nat_subnet_cidr must have prefix length <= 27 so splitting into two equal subnets results in subnets no smaller than /28 (AWS minimum subnet size)."
+    error_message = "nat_subnet_cidr must have prefix length <= 27 for the two-NAT layout, or <= 28 when preserving the legacy unsplit subnet."
   }
 }
 

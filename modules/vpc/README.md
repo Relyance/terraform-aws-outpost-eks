@@ -48,3 +48,10 @@ No modules.
 | <a name="output_subnet_ids"></a> [subnet\_ids](#output\_subnet\_ids) | n/a |
 | <a name="output_vpc_id"></a> [vpc\_id](#output\_vpc\_id) | n/a |
 <!-- END_TF_DOCS -->
+
+
+`preserve_legacy_single_nat` defaults to `false`. Set it to `true` only when
+upgrading the original single-NAT layout. It keeps the full `nat_subnet_cidr`
+(/28 or larger), one NAT/EIP, and the VPC main-table route. Retain it after the
+upgrade. Do not enable it on an existing two-NAT deployment. See the root upgrade
+instructions and review the actual state-backed plan before apply.

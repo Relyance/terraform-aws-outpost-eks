@@ -6,7 +6,7 @@ locals {
   networking_tags = merge(var.default_tags, { Name = var.base_name })
 
   # Split NAT subnet CIDR into 2 subnets (one for each of the first 2 AZs)
-  nat_subnet_cidrs = [
+  nat_subnet_cidrs = var.preserve_legacy_single_nat ? [var.nat_subnet_cidr] : [
     cidrsubnet(var.nat_subnet_cidr, 1, 0), # First half for AZ1
     cidrsubnet(var.nat_subnet_cidr, 1, 1), # Second half for AZ2
   ]
@@ -40,14 +40,14 @@ resource "aws_subnet" "main" {
 
 # Create 2 NAT subnets (one in each of first 2 AZs for high availability)
 resource "aws_subnet" "nat" {
-  count = 2
+  count = length(local.nat_subnet_cidrs)
 
   availability_zone_id    = data.aws_availability_zones.all.zone_ids[count.index]
   vpc_id                  = aws_vpc.main.id
   cidr_block              = local.nat_subnet_cidrs[count.index]
   map_public_ip_on_launch = false
 
-  tags = merge(var.default_tags, {
+  tags = var.preserve_legacy_single_nat ? null : merge(var.default_tags, {
     Name = "${var.base_name}_nat_${count.index + 1}"
   })
 }
@@ -60,23 +60,23 @@ resource "aws_internet_gateway" "main" {
 
 # Create 2 Elastic IPs (one for each NAT Gateway)
 resource "aws_eip" "nat" {
-  count = 2
+  count = length(local.nat_subnet_cidrs)
 
   domain = "vpc"
 
-  tags = merge(var.default_tags, {
+  tags = var.preserve_legacy_single_nat ? local.networking_tags : merge(var.default_tags, {
     Name = "${var.base_name}_nat_${count.index + 1}"
   })
 }
 
 # Create 2 NAT Gateways (one in each of first 2 AZs)
 resource "aws_nat_gateway" "main" {
-  count = 2
+  count = length(local.nat_subnet_cidrs)
 
   allocation_id = aws_eip.nat[count.index].id
   subnet_id     = aws_subnet.nat[count.index].id
 
-  tags = merge(var.default_tags, {
+  tags = var.preserve_legacy_single_nat ? local.networking_tags : merge(var.default_tags, {
     Name = "${var.base_name}_nat_${count.index + 1}"
   })
 
@@ -86,7 +86,7 @@ resource "aws_nat_gateway" "main" {
 # Create route tables for private subnets (one for each NAT Gateway)
 # AZ1 and AZ3 use NAT1, AZ2 and AZ4 use NAT2
 resource "aws_route_table" "private" {
-  count = 2
+  count = var.preserve_legacy_single_nat ? 0 : 2
 
   vpc_id = aws_vpc.main.id
 
@@ -103,7 +103,7 @@ resource "aws_route_table" "private" {
 # Associate private subnets with their respective route tables
 # Uses explicit mapping to ensure correct AZ-to-NAT routing
 resource "aws_route_table_association" "private" {
-  for_each = aws_subnet.main
+  for_each = var.preserve_legacy_single_nat ? {} : aws_subnet.main
 
   subnet_id      = each.value.id
   route_table_id = aws_route_table.private[local.az_to_nat_map[each.value.availability_zone_id]].id
@@ -122,8 +122,17 @@ resource "aws_route_table" "nat-igw" {
 }
 
 resource "aws_route_table_association" "nat-igw" {
-  count = 2
+  count = length(local.nat_subnet_cidrs)
 
   subnet_id      = aws_subnet.nat[count.index].id
   route_table_id = aws_route_table.nat-igw.id
+}
+
+# Legacy private subnets use the VPC main route table, without explicit associations.
+resource "aws_route" "main-nat" {
+  count = var.preserve_legacy_single_nat ? 1 : 0
+
+  route_table_id         = aws_vpc.main.main_route_table_id
+  destination_cidr_block = "0.0.0.0/0"
+  nat_gateway_id         = aws_nat_gateway.main[0].id
 }

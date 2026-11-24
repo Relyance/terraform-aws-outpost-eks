@@ -6,7 +6,7 @@
 # For collaboration, configure backend for shared remote state file
 # For maintainability, replace hard-coded values with variables or outputs from other modules
 
-# Sierra 0.10.1 supports AWS providers 5.79 and 6.x; this example selects 6.x.
+# Sierra 0.10.3 supports AWS providers 5.79 and 6.x; this example selects 6.x.
 terraform {
   required_version = "~> 1.9"
   required_providers {
@@ -19,7 +19,7 @@ terraform {
 
 module "sierra" {
   source  = "Relyance/outpost-eks/aws"
-  version = "0.10.1"
+  version = "0.10.3"
 
   # The GCP project where findings data is captured
   # To be provided by Relyance; required if code_analysis_enabled is true
